@@ -10,6 +10,10 @@ Servico Node.js independente do sistema principal. Qualquer projeto pode consumi
   Guia de implantacao, operacao e servico para Linux e Windows.
 - `scripts/install-ubuntu.sh`
   Instalador rapido para Ubuntu com `systemd`.
+- `scripts/update-ubuntu.sh`
+  Atualizador rapido para Ubuntu com backup e reinicio do servico.
+- `scripts/install-or-update-windows.ps1`
+  Script unico para criar no Windows se nao existir e atualizar se ja existir.
 
 ## O que esta base faz
 

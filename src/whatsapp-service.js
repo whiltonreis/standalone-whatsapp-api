@@ -306,7 +306,10 @@ class WhatsAppService {
 
         if (brazilianNumber) {
             if (brazilianNumber.localLength === 11 && brazilianNumber.firstDigit === '9') {
-                candidates.push(
+                // Numero com 9: tenta SEM o 9 primeiro (numeros antigos migrados pela operadora
+                // podem estar registrados no WhatsApp sem o 9; colocar sem-9 na frente evita
+                // falsos positivos onde onWhatsApp() retorna true para o numero errado)
+                candidates.unshift(
                     this.config.send.countryCode +
                     brazilianNumber.ddd +
                     brazilianNumber.subscriber.slice(1)
@@ -330,7 +333,7 @@ class WhatsAppService {
 
         if (normalizedNumber.length >= localStart + 8) {
             if (normalizedNumber[localStart] === '9') {
-                candidates.push(
+                candidates.unshift(
                     normalizedNumber.slice(0, localStart) +
                     normalizedNumber.slice(localStart + 1)
                 );

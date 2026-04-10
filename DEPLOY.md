@@ -75,6 +75,34 @@ Variaveis opcionais para o script:
 - `WHATSAPP_API_PORT`
   Porta a ser gravada no `.env`.
 
+## Atualizacao automatica no Ubuntu
+
+Depois da API instalada, voce pode atualizar com:
+
+```bash
+cd api/whatsapp
+sudo bash scripts/update-ubuntu.sh
+```
+
+Esse script:
+
+- gera backup de `.env` e `runtime/auth`
+- para o servico
+- faz `git pull --ff-only` se a pasta estiver versionada
+- roda `npm install --omit=dev`
+- valida a sintaxe da API
+- reinicia o servico
+- imprime o healthcheck e a URL de reconexao
+
+Variaveis opcionais para o script:
+
+- `WHATSAPP_SERVICE_NAME`
+  Nome do servico systemd.
+- `WHATSAPP_SKIP_GIT_PULL=true`
+  Pula a etapa de `git pull`.
+- `WHATSAPP_ALLOW_DIRTY_UPDATE=true`
+  Permite atualizar mesmo com alteracoes locais no repositorio.
+
 ### 1. Copiar a pasta da API
 
 Voce pode copiar apenas esta pasta para outro projeto:
@@ -270,6 +298,39 @@ sudo journalctl -u whatsapp-api -f
 
 ## Windows
 
+## Instalacao ou atualizacao automatica no Windows
+
+Se voce estiver usando Windows e NSSM, pode rodar um unico script que:
+
+- cria o `.env` se nao existir
+- preserva o `.env` se ja existir
+- faz backup da sessao
+- atualiza dependencias
+- cria o servico se ainda nao existir
+- atualiza e reinicia se ele ja existir
+
+Comando:
+
+```powershell
+Set-Location C:\servicos\whatsapp-api
+powershell -ExecutionPolicy Bypass -File .\scripts\install-or-update-windows.ps1
+```
+
+Parametros uteis:
+
+- `-ServiceName whatsapp-api`
+- `-ApiHost 127.0.0.1`
+- `-ApiPort 3015`
+- `-SkipGitPull`
+- `-AllowDirtyUpdate`
+- `-NssmPath "C:\caminho\nssm.exe"`
+
+Observacao:
+
+- se o servico ainda nao existir, o script precisa do NSSM instalado ou informado por `-NssmPath`
+- se o servico ja existir, ele apenas atualiza e reinicia
+- o script deve ser executado como Administrador
+
 ## Opcao 1: NSSM
 
 Recomendado para deixar como servico do Windows.
@@ -380,6 +441,18 @@ Fluxo recomendado:
 4. rodar `npm install`
 5. subir o servico novamente
 6. validar `/health` e `/status`
+
+No Ubuntu, esse fluxo pode ser automatizado com:
+
+```bash
+sudo bash scripts/update-ubuntu.sh
+```
+
+No Windows, o equivalente fica em:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-or-update-windows.ps1
+```
 
 ## Dicas operacionais
 

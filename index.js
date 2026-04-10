@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 
 const { startServer } = require('./src/server');
 
