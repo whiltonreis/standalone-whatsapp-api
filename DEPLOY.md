@@ -457,8 +457,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-or-update-windows.ps1
 ## Dicas operacionais
 
 - se apagar `runtime/auth/`, sera necessario conectar por QR de novo
-- se o envio comecar a errar por variacao de numero, valide antes em `/resolve-number`
-- o numero canonico deve ser salvo no sistema integrador
+- se o envio comecar a errar por variacao de numero, apague `runtime/cache/numero_cache.json` e valide antes em `/resolve-number`
+- para numeros brasileiros de 13 digitos (com 9), a API tenta o formato sem o 9 primeiro — isso cobre contas antigas que nao foram migradas para o formato moderno
+- o `resolvedNumber` retornado por `/resolve-number` pode ser diferente do numero informado; salve esse valor no sistema integrador para evitar revalidacao continua
 - o maior crescimento de arquivo fica em `runtime/logs/`, mas a limpeza automatica ja reduz isso
 
 ## Checklist rapido de producao

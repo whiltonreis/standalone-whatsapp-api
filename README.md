@@ -132,28 +132,47 @@ Pagina HTML local para conectar o numero por QR.
 
 Resolve e cacheia o numero canonico antes do envio.
 
-Regras atuais:
+Regras de resolucao para numeros brasileiros (habilitado por `WHATSAPP_ENABLE_NINE_DIGIT_FALLBACK=true`):
 
-- sempre tenta primeiro exatamente o numero informado
-- no caso do Brasil, so tenta a variacao com/sem `9` como fallback
-- se o numero ja foi resolvido antes, usa cache
+- **13 digitos (com 9):** tenta primeiro **sem o 9**, depois **com o 9** como fallback.
+  Isso cobre numeros antigos registrados no WhatsApp antes da migracao obrigatoria de 9 digitos.
+- **12 digitos (sem 9):** tenta primeiro **sem o 9**, depois **com o 9** como fallback.
+  Isso cobre numeros que foram migrados pela operadora mas estao armazenados no formato antigo.
+- Se nenhum dos candidatos estiver registrado no WhatsApp, retorna `404`.
+- O `resolvedNumber` retornado pode ser diferente do numero informado — esse e o numero canonico a ser salvo.
+- Na proxima chamada com o mesmo numero de entrada, o resultado vem do cache (sem nova consulta ao WhatsApp).
 
 Payload:
 
 ```json
 {
-  "number": "554384162658"
+  "number": "5543984162658"
 }
 ```
 
-Resposta exemplo:
+Resposta quando o numero com 9 resolve para o formato sem 9 (numero antigo):
 
 ```json
 {
-  "normalizedNumber": "554384162658",
+  "normalizedNumber": "5543984162658",
+  "resolvedNumber": "554384162658",
+  "cachedResolution": false,
+  "exactMatch": false,
+  "candidatesTried": [
+    "554384162658",
+    "5543984162658"
+  ]
+}
+```
+
+Resposta quando o numero ja estava em cache:
+
+```json
+{
+  "normalizedNumber": "5543984162658",
   "resolvedNumber": "554384162658",
   "cachedResolution": true,
-  "exactMatch": true,
+  "exactMatch": false,
   "candidatesTried": [
     "554384162658"
   ]
@@ -192,10 +211,12 @@ Encerra a sessao atual, limpa o diretorio de autenticacao e reinicia o fluxo par
 
 Para reduzir tentativas erradas no WhatsApp:
 
-1. consulte `POST /resolve-number`
-2. grave o `resolvedNumber` no banco do seu sistema
-3. use esse numero resolvido nos envios futuros
+1. consulte `POST /resolve-number` com o numero armazenado no seu sistema
+2. grave o `resolvedNumber` retornado no banco do seu sistema
+3. use sempre o `resolvedNumber` nos proximos envios
 4. evite usar `/send` com numeros nunca validados em massa
+
+O `resolvedNumber` pode diferir do numero informado (ex.: `5543984162658` pode resolver para `554384162658`) porque a API tenta o formato sem o 9 primeiro para compatibilidade com contas antigas.
 
 ## O que salvar no sistema integrador
 
@@ -203,10 +224,12 @@ A API mantem um cache tecnico local, mas o dado oficial deve ficar no sistema qu
 
 Sugestao de campos:
 
-- `telefone_informado`
-- `whatsapp_numero_canonico`
-- `whatsapp_resolvido_em`
-- `whatsapp_status_resolucao`
+- `telefone_informado` — numero digitado pelo usuario
+- `whatsapp_numero_canonico` — `resolvedNumber` retornado pela API
+- `whatsapp_resolvido_em` — data da ultima resolucao
+- `whatsapp_status_resolucao` — `ok` / `nao_encontrado`
+
+Ao salvar o `whatsapp_numero_canonico`, os proximos envios irao diretamente para o numero correto sem depender do cache da API.
 
 ## Observacoes operacionais
 
