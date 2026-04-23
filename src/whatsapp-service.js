@@ -349,7 +349,7 @@ class WhatsAppService {
             const remoteJid = item?.key?.remoteJid || '';
             const fromMe    = item?.key?.fromMe ?? true;
 
-            if (!item?.message || fromMe) {
+            if (!item?.message) {
                 continue;
             }
 
@@ -375,6 +375,23 @@ class WhatsAppService {
                 this.logger.warn('Nao foi possivel resolver numero do remetente', {
                     sessionId: this.config.runtime.sessionId || null,
                     remoteJid,
+                });
+                continue;
+            }
+
+            if (fromMe) {
+                // Mensagem enviada pelo celular do operador — registrar na plataforma
+                const mediaInfo = mediaType ? await this.downloadAndSaveMedia(item, mediaType).catch(() => null) : null;
+                await this.dispatchIncomingWebhook({
+                    session_id:     this.config.runtime.sessionId || null,
+                    direction:      'outgoing',
+                    phone,
+                    message:        message || '',
+                    media_type:     mediaInfo?.media_type     || mediaType || null,
+                    media_url:      mediaInfo?.media_url      || null,
+                    media_filename: mediaInfo?.media_filename || null,
+                    media_mime:     mediaInfo?.media_mime     || null,
+                    sent_at:        this.messageTimestampIso(item),
                 });
                 continue;
             }
