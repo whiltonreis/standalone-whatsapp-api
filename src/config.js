@@ -130,6 +130,12 @@ const config = {
         baseDelayMs: toInt(process.env.WHATSAPP_RECONNECT_BASE_DELAY_MS, 3000),
         maxDelayMs: toInt(process.env.WHATSAPP_RECONNECT_MAX_DELAY_MS, 30000),
     },
+    webhook: {
+        enabled: toBool(process.env.WHATSAPP_WEBHOOK_ENABLED, false),
+        url: process.env.WHATSAPP_WEBHOOK_URL || '',
+        token: process.env.WHATSAPP_WEBHOOK_TOKEN || '',
+        timeoutMs: Math.max(toInt(process.env.WHATSAPP_WEBHOOK_TIMEOUT_MS, 5000), 1000),
+    },
 };
 
 function assertConfig() {

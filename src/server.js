@@ -7,7 +7,8 @@ const QRErrorCorrectLevel = require('qrcode-terminal/vendor/QRCode/QRErrorCorrec
 
 const { config, assertConfig } = require('./config');
 const { createLogger } = require('./logger');
-const { HttpError, WhatsAppService } = require('./whatsapp-service');
+const { HttpError } = require('./whatsapp-service');
+const { SessionManager, DEFAULT_SESSION_ID } = require('./session-manager');
 
 function escapeHtml(value) {
     return String(value ?? '')
@@ -320,10 +321,10 @@ function asyncHandler(handler) {
     };
 }
 
-function attachShutdown(server, service, logger) {
+function attachShutdown(server, sessionManager, logger) {
     const shutdown = async (signal) => {
         logger.warn('Encerrando a API WhatsApp', { signal });
-        await service.stop();
+        await sessionManager.stopAll();
 
         await new Promise((resolve) => {
             server.close(resolve);
@@ -351,14 +352,17 @@ async function startServer() {
         retentionDays: config.logs.retentionDays,
         devRetentionDays: config.logs.devRetentionDays,
     });
-    const service = new WhatsAppService(config, logger);
 
-    await service.start();
+    const sessionManager = new SessionManager(config, logger);
+    await sessionManager.start(DEFAULT_SESSION_ID);
+    await sessionManager.autoStartSavedSessions();
 
     const app = express();
     app.disable('x-powered-by');
     app.use(cors(buildCorsOptions()));
     app.use(express.json({ limit: config.api.bodyLimit }));
+
+    // ── Legacy single-session routes (backward compat → default session) ──
 
     app.get('/connect', (req, res) => {
         if (config.auth.enabled && extractToken(req) !== config.api.key) {
@@ -373,7 +377,8 @@ async function startServer() {
             return res.status(401).send('Nao autorizado.');
         }
 
-        const qr = service.getQr();
+        const service = sessionManager.get(DEFAULT_SESSION_ID);
+        const qr = service ? service.getQr() : null;
 
         if (!qr) {
             return res.status(404).send('QR Code nao disponivel.');
@@ -386,40 +391,130 @@ async function startServer() {
     app.use(authMiddleware);
 
     app.get('/health', (req, res) => {
+        const service = sessionManager.get(DEFAULT_SESSION_ID);
         res.json({
             ok: true,
             service: 'whatsapp-api',
-            connection: service.getStatus().connection,
+            connection: service ? service.getStatus().connection : 'idle',
         });
     });
 
     app.get('/status', (req, res) => {
-        res.json(service.getStatus());
+        const service = sessionManager.get(DEFAULT_SESSION_ID);
+        res.json(service ? service.getStatus() : { connection: 'idle', connected: false, hasQr: false });
     });
 
     app.get('/qrcode', (req, res) => {
-        const qr = service.getQr();
+        const service = sessionManager.get(DEFAULT_SESSION_ID);
+        const qr = service ? service.getQr() : null;
 
         if (!qr) {
-            return res.status(404).json({
-                error: 'QR Code nao disponivel ou sessao ja conectada.',
-            });
+            return res.status(404).json({ error: 'QR Code nao disponivel ou sessao ja conectada.' });
         }
 
         return res.json({ qr });
     });
 
     app.post('/send', asyncHandler(async (req, res) => {
+        const service = sessionManager.get(DEFAULT_SESSION_ID);
+        if (!service) return res.status(503).json({ error: 'Sessao padrao nao iniciada.' });
         const result = await service.sendText(req.body || {});
         res.json(result);
     }));
 
+    app.post('/send-media', asyncHandler(async (req, res) => {
+        const service = sessionManager.get(DEFAULT_SESSION_ID);
+        if (!service) return res.status(503).json({ error: 'Sessao padrao nao iniciada.' });
+        const result = await service.sendMedia(req.body || {});
+        res.json(result);
+    }));
+
     app.post('/resolve-number', asyncHandler(async (req, res) => {
+        const service = sessionManager.get(DEFAULT_SESSION_ID);
+        if (!service) return res.status(503).json({ error: 'Sessao padrao nao iniciada.' });
         const result = await service.resolveNumber(req.body || {});
         res.json(result);
     }));
 
     app.post('/logout', asyncHandler(async (req, res) => {
+        const service = sessionManager.get(DEFAULT_SESSION_ID);
+        if (!service) return res.status(503).json({ error: 'Sessao padrao nao iniciada.' });
+        const result = await service.logout();
+        res.json(result);
+    }));
+
+    // ── Multi-session routes ──
+
+    app.get('/sessions', (req, res) => {
+        res.json(sessionManager.list());
+    });
+
+    app.post('/sessions/:id/start', asyncHandler(async (req, res) => {
+        const sessionId = req.params.id;
+        await sessionManager.start(sessionId);
+        res.json({ ok: true, sessionId });
+    }));
+
+    app.get('/sessions/:id/status', (req, res) => {
+        const service = sessionManager.get(req.params.id);
+
+        if (!service) {
+            return res.status(404).json({ error: 'Sessao nao encontrada.' });
+        }
+
+        res.json(service.getStatus());
+    });
+
+    app.get('/sessions/:id/qrcode.svg', (req, res) => {
+        if (config.auth.enabled && extractToken(req) !== config.api.key) {
+            return res.status(401).send('Nao autorizado.');
+        }
+
+        const service = sessionManager.get(req.params.id);
+
+        if (!service) {
+            return res.status(404).send('Sessao nao encontrada.');
+        }
+
+        const qr = service.getQr();
+
+        if (!qr) {
+            return res.status(404).send('QR Code nao disponivel.');
+        }
+
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.type('image/svg+xml').send(buildQrSvg(qr));
+    });
+
+    app.post('/sessions/:id/send', asyncHandler(async (req, res) => {
+        const service = sessionManager.get(req.params.id);
+
+        if (!service) {
+            return res.status(404).json({ error: 'Sessao nao encontrada.' });
+        }
+
+        const result = await service.sendText(req.body || {});
+        res.json(result);
+    }));
+
+    app.post('/sessions/:id/send-media', asyncHandler(async (req, res) => {
+        const service = sessionManager.get(req.params.id);
+
+        if (!service) {
+            return res.status(404).json({ error: 'Sessao nao encontrada.' });
+        }
+
+        const result = await service.sendMedia(req.body || {});
+        res.json(result);
+    }));
+
+    app.post('/sessions/:id/logout', asyncHandler(async (req, res) => {
+        const service = sessionManager.get(req.params.id);
+
+        if (!service) {
+            return res.status(404).json({ error: 'Sessao nao encontrada.' });
+        }
+
         const result = await service.logout();
         res.json(result);
     }));
@@ -459,9 +554,9 @@ async function startServer() {
         });
     });
 
-    attachShutdown(server, service, logger);
+    attachShutdown(server, sessionManager, logger);
 
-    return { app, server, service, logger };
+    return { app, server, sessionManager, logger };
 }
 
 module.exports = {
