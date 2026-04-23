@@ -722,7 +722,7 @@ class WhatsAppService {
         const resolved = await this.resolveRegisteredNumber(normalizedNumber);
         const jid = `${resolved.number}@s.whatsapp.net`;
 
-        await this.sock.sendMessage(jid, { text: message });
+        const sendResult = await this.sock.sendMessage(jid, { text: message });
 
         const logMeta = {
             number: maskPhone(normalizedNumber),
@@ -742,6 +742,7 @@ class WhatsAppService {
             normalizedNumber,
             sentTo: resolved.number,
             cachedResolution: resolved.cached,
+            messageId: sendResult?.key?.id || null,
         };
     }
 
@@ -793,11 +794,28 @@ class WhatsAppService {
             msgContent = { document: buffer, fileName: fileName || 'arquivo', mimetype: mime || 'application/octet-stream' };
         }
 
-        await this.sock.sendMessage(jid, msgContent);
+        const sendResult = await this.sock.sendMessage(jid, msgContent);
 
         this.logger.info('Midia enviada', { number: maskPhone(normalizedNumber), mediaType, fileName });
 
-        return { ok: true, status: 'Midia enviada com sucesso!' };
+        return { ok: true, status: 'Midia enviada com sucesso!', messageId: sendResult?.key?.id || null };
+    }
+
+    async deleteMessage(payload) {
+        const { number, messageId } = payload;
+        if (!messageId) throw new Error('messageId obrigatorio.');
+
+        const normalizedNumber = this.normalizeNumber(number);
+        this.ensureConnected();
+        const resolved = await this.resolveRegisteredNumber(normalizedNumber);
+        const jid = `${resolved.number}@s.whatsapp.net`;
+
+        await this.sock.sendMessage(jid, {
+            delete: { remoteJid: jid, fromMe: true, id: messageId },
+        });
+
+        this.logger.info('Mensagem excluida', { number: maskPhone(normalizedNumber), messageId });
+        return { ok: true };
     }
 
     async logout() {
