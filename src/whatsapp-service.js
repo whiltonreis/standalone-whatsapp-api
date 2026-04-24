@@ -94,6 +94,7 @@ class WhatsAppService {
         };
         this.numberCache = new JsonStore(this.config.runtime.numberCacheFile, {});
         this._sentByApiIds = new Set();
+        this._groupSubjectCache = new Map();
     }
 
     _trackSentId(id) {
@@ -170,6 +171,59 @@ class WhatsAppService {
 
         const phone = jid.split('@')[0].replace(/\D/g, '');
         return phone || '';
+    }
+
+    isGroupJid(jid) {
+        return String(jid ?? '').trim().endsWith('@g.us');
+    }
+
+    isIndividualJid(jid) {
+        return String(jid ?? '').trim().endsWith('@s.whatsapp.net');
+    }
+
+    isLidJid(jid) {
+        return String(jid ?? '').trim().endsWith('@lid');
+    }
+
+    extractParticipantJid(item) {
+        const contextInfo = this.extractContextInfo(item?.message || {});
+        const candidate =
+            item?.key?.participant ||
+            item?.participant ||
+            contextInfo?.participant ||
+            '';
+
+        return typeof candidate === 'string' ? candidate.trim() : '';
+    }
+
+    async resolveGroupName(remoteJid) {
+        const jid = String(remoteJid ?? '').trim();
+        if (!this.isGroupJid(jid)) {
+            return null;
+        }
+
+        const cached = this._groupSubjectCache.get(jid);
+        if (cached) {
+            return cached;
+        }
+
+        try {
+            const metadata = await this.sock.groupMetadata(jid);
+            const subject = typeof metadata?.subject === 'string' ? metadata.subject.trim() : '';
+
+            if (subject) {
+                this._groupSubjectCache.set(jid, subject);
+                return subject;
+            }
+        } catch (error) {
+            this.logger.warn('Falha ao resolver nome do grupo', {
+                error: error.message,
+                remoteJid: jid,
+                sessionId: this.config.runtime.sessionId || null,
+            });
+        }
+
+        return null;
     }
 
     mediaTypeFromMessage(msgContent) {
@@ -395,10 +449,11 @@ class WhatsAppService {
                 continue;
             }
 
-            const isIndividual = remoteJid.endsWith('@s.whatsapp.net');
-            const isLid        = remoteJid.endsWith('@lid');
+            const isIndividual = this.isIndividualJid(remoteJid);
+            const isLid        = this.isLidJid(remoteJid);
+            const isGroup      = this.isGroupJid(remoteJid);
 
-            if (!isIndividual && !isLid) {
+            if (!isIndividual && !isLid && !isGroup) {
                 continue;
             }
 
@@ -410,11 +465,16 @@ class WhatsAppService {
                 continue;
             }
 
-            const phone = isLid
-                ? this.resolveLidToPhone(remoteJid)
-                : this.normalizeIncomingPhone(remoteJid);
+            const participantJid = isGroup ? this.extractParticipantJid(item) : remoteJid;
+            const phone = this.isLidJid(participantJid)
+                ? this.resolveLidToPhone(participantJid)
+                : this.normalizeIncomingPhone(participantJid);
+            const groupName = isGroup ? await this.resolveGroupName(remoteJid) : null;
+            const participantName = typeof item?.pushName === 'string' && item.pushName.trim()
+                ? item.pushName.trim()
+                : (phone || '');
 
-            if (!phone) {
+            if (!phone && !isGroup) {
                 this.logger.warn('Nao foi possivel resolver numero do remetente', {
                     sessionId: this.config.runtime.sessionId || null,
                     remoteJid,
@@ -432,7 +492,13 @@ class WhatsAppService {
                 await this.dispatchIncomingWebhook({
                     session_id:     this.config.runtime.sessionId || null,
                     direction:      'outgoing',
-                    phone,
+                    phone:          phone || null,
+                    name:           isGroup ? (groupName || remoteJid) : (item.pushName || phone),
+                    chat_id:        isGroup ? remoteJid : null,
+                    chat_name:      isGroup ? (groupName || null) : null,
+                    is_group:       isGroup || null,
+                    participant_phone: isGroup ? (phone || null) : null,
+                    participant_name: isGroup ? (participantName || null) : null,
                     message:        message || '',
                     media_type:     mediaInfo?.media_type     || mediaType || null,
                     media_url:      mediaInfo?.media_url      || null,
@@ -445,18 +511,27 @@ class WhatsAppService {
                 continue;
             }
 
-            const contactJid = `${phone}@s.whatsapp.net`;
+            const contactJid = isGroup
+                ? remoteJid
+                : (phone ? `${phone}@s.whatsapp.net` : '');
             const [avatarUrl, mediaInfo] = await Promise.all([
-                this.sock.profilePictureUrl(contactJid, 'image').catch(() => null),
+                contactJid
+                    ? this.sock.profilePictureUrl(contactJid, 'image').catch(() => null)
+                    : Promise.resolve(null),
                 mediaType ? this.downloadAndSaveMedia(item, mediaType) : Promise.resolve(null),
             ]);
 
             await this.dispatchIncomingWebhook({
                 session_id:     this.config.runtime.sessionId || null,
-                phone,
-                name:           item.pushName || phone,
+                phone:          phone || null,
+                name:           isGroup ? (groupName || remoteJid) : (item.pushName || phone),
                 message:        message || '',
                 avatar_url:     avatarUrl || null,
+                chat_id:        isGroup ? remoteJid : null,
+                chat_name:      isGroup ? (groupName || null) : null,
+                is_group:       isGroup || null,
+                participant_phone: isGroup ? (phone || null) : null,
+                participant_name: isGroup ? (participantName || null) : null,
                 media_type:     mediaInfo?.media_type     || mediaType || null,
                 media_url:      mediaInfo?.media_url      || null,
                 media_filename: mediaInfo?.media_filename || null,
@@ -781,24 +856,62 @@ class WhatsAppService {
         };
     }
 
+    async resolveMessageTarget(value) {
+        const raw = String(value ?? '').trim();
+
+        if (!raw) {
+            throw new HttpError(400, 'Informe um destino valido.');
+        }
+
+        if (raw.includes('@')) {
+            if (!this.isGroupJid(raw) && !this.isIndividualJid(raw) && !this.isLidJid(raw)) {
+                throw new HttpError(400, 'Destino WhatsApp invalido.');
+            }
+
+            return {
+                jid: raw,
+                normalizedNumber: null,
+                resolvedNumber: null,
+                cachedResolution: false,
+                isRawJid: true,
+            };
+        }
+
+        const normalizedNumber = this.normalizeNumber(raw);
+        const resolved = await this.resolveRegisteredNumber(normalizedNumber);
+
+        return {
+            jid: `${resolved.number}@s.whatsapp.net`,
+            normalizedNumber,
+            resolvedNumber: resolved.number,
+            cachedResolution: resolved.cached,
+            isRawJid: false,
+        };
+    }
+
+    formatLogTarget(target) {
+        const value = String(target ?? '').trim();
+        return value.includes('@') ? value : maskPhone(value);
+    }
+
     async sendText(payload) {
         const message = this.sanitizeMessage(payload.message);
-        const normalizedNumber = this.normalizeNumber(payload.number);
-
         this.ensureConnected();
+        const target = await this.resolveMessageTarget(payload.target ?? payload.number);
 
-        const resolved = await this.resolveRegisteredNumber(normalizedNumber);
-        const jid = `${resolved.number}@s.whatsapp.net`;
-
-        const sendResult = await this.sock.sendMessage(jid, { text: message });
+        const sendResult = await this.sock.sendMessage(target.jid, { text: message });
         this._trackSentId(sendResult?.key?.id);
 
         const logMeta = {
-            number: maskPhone(normalizedNumber),
-            sentTo: maskPhone(resolved.number),
-            cachedResolution: resolved.cached,
+            target: this.formatLogTarget(target.jid),
             messageLength: message.length,
         };
+
+        if (!target.isRawJid) {
+            logMeta.number = maskPhone(target.normalizedNumber);
+            logMeta.sentTo = maskPhone(target.resolvedNumber);
+            logMeta.cachedResolution = target.cachedResolution;
+        }
 
         if (this.config.send.logMessageContent) {
             logMeta.message = message;
@@ -808,9 +921,9 @@ class WhatsAppService {
 
         return {
             status: 'Mensagem enviada com sucesso!',
-            normalizedNumber,
-            sentTo: resolved.number,
-            cachedResolution: resolved.cached,
+            normalizedNumber: target.normalizedNumber,
+            sentTo: target.isRawJid ? target.jid : target.resolvedNumber,
+            cachedResolution: target.isRawJid ? null : target.cachedResolution,
             messageId: sendResult?.key?.id || null,
         };
     }
@@ -819,10 +932,7 @@ class WhatsAppService {
         const { number, mediaPath, mediaType, fileName, mime, caption } = payload;
 
         this.ensureConnected();
-
-        const normalizedNumber = this.normalizeNumber(number);
-        const resolved = await this.resolveRegisteredNumber(normalizedNumber);
-        const jid = `${resolved.number}@s.whatsapp.net`;
+        const target = await this.resolveMessageTarget(payload.target ?? number);
 
         const buffer = require('fs').readFileSync(mediaPath);
         let msgContent;
@@ -863,10 +973,15 @@ class WhatsAppService {
             msgContent = { document: buffer, fileName: fileName || 'arquivo', mimetype: mime || 'application/octet-stream' };
         }
 
-        const sendResult = await this.sock.sendMessage(jid, msgContent);
+        const sendResult = await this.sock.sendMessage(target.jid, msgContent);
         this._trackSentId(sendResult?.key?.id);
 
-        this.logger.info('Midia enviada', { number: maskPhone(normalizedNumber), mediaType, fileName });
+        this.logger.info('Midia enviada', {
+            target: this.formatLogTarget(target.jid),
+            mediaType,
+            fileName,
+            ...(target.isRawJid ? {} : { number: maskPhone(target.normalizedNumber) }),
+        });
 
         return { ok: true, status: 'Midia enviada com sucesso!', messageId: sendResult?.key?.id || null };
     }
@@ -875,16 +990,18 @@ class WhatsAppService {
         const { number, messageId } = payload;
         if (!messageId) throw new Error('messageId obrigatorio.');
 
-        const normalizedNumber = this.normalizeNumber(number);
         this.ensureConnected();
-        const resolved = await this.resolveRegisteredNumber(normalizedNumber);
-        const jid = `${resolved.number}@s.whatsapp.net`;
+        const target = await this.resolveMessageTarget(payload.target ?? number);
 
-        await this.sock.sendMessage(jid, {
-            delete: { remoteJid: jid, fromMe: true, id: messageId },
+        await this.sock.sendMessage(target.jid, {
+            delete: { remoteJid: target.jid, fromMe: true, id: messageId },
         });
 
-        this.logger.info('Mensagem excluida', { number: maskPhone(normalizedNumber), messageId });
+        this.logger.info('Mensagem excluida', {
+            target: this.formatLogTarget(target.jid),
+            messageId,
+            ...(target.isRawJid ? {} : { number: maskPhone(target.normalizedNumber) }),
+        });
         return { ok: true };
     }
 
