@@ -9,8 +9,7 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ENV_FILE="${APP_DIR}/.env"
-SERVICE_NAME="${WHATSAPP_SERVICE_NAME:-whatsapp-api}"
-SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+REQUESTED_SERVICE_NAME="${WHATSAPP_SERVICE_NAME:-whatsapp-api}"
 BACKUP_ROOT="${APP_DIR}/backups"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="${BACKUP_ROOT}/${TIMESTAMP}"
@@ -53,6 +52,63 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+service_exists() {
+    local service_name="$1"
+
+    systemctl list-unit-files --type=service --no-legend 2>/dev/null \
+        | awk '{print $1}' \
+        | grep -Fxq "${service_name}.service"
+}
+
+service_matches_app_dir() {
+    local unit="$1"
+    local definition=""
+
+    definition="$(systemctl cat "${unit}" 2>/dev/null || true)"
+    [[ -n "${definition}" ]] || return 1
+
+    grep -Fq "WorkingDirectory=${APP_DIR}" <<<"${definition}" \
+        || grep -Fq "${APP_DIR}/index.js" <<<"${definition}"
+}
+
+resolve_service_name() {
+    if service_exists "${REQUESTED_SERVICE_NAME}"; then
+        printf '%s' "${REQUESTED_SERVICE_NAME}"
+        return
+    fi
+
+    while read -r unit _; do
+        [[ -n "${unit}" ]] || continue
+        service_matches_app_dir "${unit}" || continue
+        printf '%s' "${unit%.service}"
+        return
+    done < <(systemctl list-unit-files --type=service --no-legend 2>/dev/null)
+
+    printf '%s' "${REQUESTED_SERVICE_NAME}"
+}
+
+list_api_process_pids() {
+    local pid=""
+    local args=""
+    local cwd=""
+
+    while read -r pid; do
+        [[ -n "${pid}" ]] || continue
+        args="$(ps -p "${pid}" -o args= 2>/dev/null || true)"
+        [[ -n "${args}" ]] || continue
+
+        if [[ "${args}" == *"${APP_DIR}/index.js"* ]]; then
+            printf '%s\n' "${pid}"
+            continue
+        fi
+
+        cwd="$(readlink -f "/proc/${pid}/cwd" 2>/dev/null || true)"
+        if [[ "${cwd}" == "${APP_DIR}" && "${args}" == *"index.js"* ]]; then
+            printf '%s\n' "${pid}"
+        fi
+    done < <(pgrep -x node 2>/dev/null || true)
+}
+
 detect_app_user() {
     if [[ -f "${SERVICE_FILE}" ]]; then
         local configured_user
@@ -66,7 +122,11 @@ detect_app_user() {
     printf '%s' "${WHATSAPP_SERVICE_USER:-${SUDO_USER:-root}}"
 }
 
+SERVICE_NAME="$(resolve_service_name)"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 APP_USER="$(detect_app_user)"
+
+log "Servico resolvido para atualizacao: ${SERVICE_NAME}"
 
 ensure_prerequisites() {
     [[ -f "${ENV_FILE}" ]] || fail "Arquivo .env nao encontrado. Rode primeiro o install-ubuntu.sh."
@@ -111,13 +171,28 @@ backup_state() {
 }
 
 stop_service() {
-    if systemctl list-unit-files | grep -Fq "${SERVICE_NAME}.service"; then
+    if service_exists "${SERVICE_NAME}"; then
         log "Parando servico ${SERVICE_NAME}..."
         systemctl stop "${SERVICE_NAME}" || true
         return
     fi
 
     log "Servico ${SERVICE_NAME} nao encontrado. Vou continuar sem parar servico."
+}
+
+stop_stray_processes() {
+    mapfile -t api_pids < <(list_api_process_pids)
+    [[ ${#api_pids[@]} -gt 0 ]] || return 0
+
+    log "Encerrando processos avulsos da API: ${api_pids[*]}"
+    kill "${api_pids[@]}" 2>/dev/null || true
+    sleep 2
+
+    mapfile -t remaining_pids < <(list_api_process_pids)
+    [[ ${#remaining_pids[@]} -gt 0 ]] || return 0
+
+    log "Forcando encerramento dos processos restantes: ${remaining_pids[*]}"
+    kill -9 "${remaining_pids[@]}" 2>/dev/null || true
 }
 
 assert_clean_git_worktree() {
@@ -162,14 +237,14 @@ validate_application() {
 }
 
 restart_service() {
-    if systemctl list-unit-files | grep -Fq "${SERVICE_NAME}.service"; then
+    if service_exists "${SERVICE_NAME}"; then
         log "Reiniciando servico ${SERVICE_NAME}..."
         systemctl daemon-reload
         systemctl restart "${SERVICE_NAME}"
         return
     fi
 
-    fail "Servico ${SERVICE_NAME} nao encontrado. Rode o install-ubuntu.sh primeiro."
+    fail "Servico ${SERVICE_NAME} nao encontrado. Rode o install-ubuntu.sh primeiro ou informe WHATSAPP_SERVICE_NAME com o nome correto."
 }
 
 wait_for_healthcheck() {
@@ -231,6 +306,7 @@ main() {
     ensure_runtime_structure
     backup_state
     stop_service
+    stop_stray_processes
     update_code_from_git
     install_dependencies
     validate_application
