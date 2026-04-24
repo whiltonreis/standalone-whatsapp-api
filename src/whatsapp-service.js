@@ -93,6 +93,13 @@ class WhatsAppService {
             startedAt: null,
         };
         this.numberCache = new JsonStore(this.config.runtime.numberCacheFile, {});
+        this._sentByApiIds = new Set();
+    }
+
+    _trackSentId(id) {
+        if (!id) return;
+        this._sentByApiIds.add(id);
+        setTimeout(() => this._sentByApiIds.delete(id), 30000);
     }
 
     extractTextFromMessageContent(content) {
@@ -119,6 +126,40 @@ class WhatsAppService {
         }
 
         return '';
+    }
+
+    extractContextInfo(content) {
+        if (!content || typeof content !== 'object') {
+            return null;
+        }
+
+        const candidates = [
+            content.extendedTextMessage?.contextInfo,
+            content.imageMessage?.contextInfo,
+            content.audioMessage?.contextInfo,
+            content.videoMessage?.contextInfo,
+            content.documentMessage?.contextInfo,
+            content.documentWithCaptionMessage?.message?.documentMessage?.contextInfo,
+            content.stickerMessage?.contextInfo,
+            content.buttonsResponseMessage?.contextInfo,
+            content.listResponseMessage?.contextInfo,
+            content.templateButtonReplyMessage?.contextInfo,
+        ];
+
+        for (const candidate of candidates) {
+            if (candidate && typeof candidate === 'object') {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    extractReplyReference(content) {
+        const contextInfo = this.extractContextInfo(content);
+        const stanzaId = typeof contextInfo?.stanzaId === 'string' ? contextInfo.stanzaId.trim() : '';
+
+        return stanzaId || null;
     }
 
     normalizeIncomingPhone(remoteJid) {
@@ -348,6 +389,7 @@ class WhatsAppService {
         for (const item of items) {
             const remoteJid = item?.key?.remoteJid || '';
             const fromMe    = item?.key?.fromMe ?? true;
+            const externalId = typeof item?.key?.id === 'string' ? item.key.id.trim() : '';
 
             if (!item?.message) {
                 continue;
@@ -362,6 +404,7 @@ class WhatsAppService {
 
             const message   = this.extractTextFromMessageContent(item.message);
             const mediaType = this.mediaTypeFromMessage(item.message || {});
+            const replyToExternalId = this.extractReplyReference(item.message || {});
 
             if (!message && !mediaType) {
                 continue;
@@ -380,6 +423,10 @@ class WhatsAppService {
             }
 
             if (fromMe) {
+                if (externalId && this._sentByApiIds.has(externalId)) {
+                    this._sentByApiIds.delete(externalId);
+                    continue; // enviado pela plataforma — ja registrado, evitar duplicacao
+                }
                 // Mensagem enviada pelo celular do operador — registrar na plataforma
                 const mediaInfo = mediaType ? await this.downloadAndSaveMedia(item, mediaType).catch(() => null) : null;
                 await this.dispatchIncomingWebhook({
@@ -391,6 +438,8 @@ class WhatsAppService {
                     media_url:      mediaInfo?.media_url      || null,
                     media_filename: mediaInfo?.media_filename || null,
                     media_mime:     mediaInfo?.media_mime     || null,
+                    external_id:    externalId || null,
+                    reply_to_external_id: replyToExternalId,
                     sent_at:        this.messageTimestampIso(item),
                 });
                 continue;
@@ -412,6 +461,8 @@ class WhatsAppService {
                 media_url:      mediaInfo?.media_url      || null,
                 media_filename: mediaInfo?.media_filename || null,
                 media_mime:     mediaInfo?.media_mime     || null,
+                external_id:    externalId || null,
+                reply_to_external_id: replyToExternalId,
                 sent_at:        this.messageTimestampIso(item),
             });
         }
@@ -740,6 +791,7 @@ class WhatsAppService {
         const jid = `${resolved.number}@s.whatsapp.net`;
 
         const sendResult = await this.sock.sendMessage(jid, { text: message });
+        this._trackSentId(sendResult?.key?.id);
 
         const logMeta = {
             number: maskPhone(normalizedNumber),
@@ -812,6 +864,7 @@ class WhatsAppService {
         }
 
         const sendResult = await this.sock.sendMessage(jid, msgContent);
+        this._trackSentId(sendResult?.key?.id);
 
         this.logger.info('Midia enviada', { number: maskPhone(normalizedNumber), mediaType, fileName });
 
