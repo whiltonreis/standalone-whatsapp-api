@@ -134,8 +134,8 @@ Resolve e cacheia o numero canonico antes do envio.
 
 Regras de resolucao para numeros brasileiros (habilitado por `WHATSAPP_ENABLE_NINE_DIGIT_FALLBACK=true`):
 
-- **13 digitos (com 9):** tenta primeiro **sem o 9**, depois **com o 9** como fallback.
-  Isso cobre numeros antigos registrados no WhatsApp antes da migracao obrigatoria de 9 digitos.
+- **13 digitos (com 9):** tenta primeiro **exatamente como foi informado**, depois **sem o 9** como fallback.
+  Isso reduz erro de entrega em numeros atuais e ainda cobre numeros antigos registrados no WhatsApp antes da migracao obrigatoria de 9 digitos.
 - **12 digitos (sem 9):** tenta primeiro **sem o 9**, depois **com o 9** como fallback.
   Isso cobre numeros que foram migrados pela operadora mas estao armazenados no formato antigo.
 - Se nenhum dos candidatos estiver registrado no WhatsApp, retorna `404`.
@@ -159,8 +159,8 @@ Resposta quando o numero com 9 resolve para o formato sem 9 (numero antigo):
   "cachedResolution": false,
   "exactMatch": false,
   "candidatesTried": [
-    "554384162658",
-    "5543984162658"
+    "5543984162658",
+    "554384162658"
   ]
 }
 ```
@@ -216,7 +216,7 @@ Para reduzir tentativas erradas no WhatsApp:
 3. use sempre o `resolvedNumber` nos proximos envios
 4. evite usar `/send` com numeros nunca validados em massa
 
-O `resolvedNumber` pode diferir do numero informado (ex.: `5543984162658` pode resolver para `554384162658`) porque a API tenta o formato sem o 9 primeiro para compatibilidade com contas antigas.
+O `resolvedNumber` pode diferir do numero informado (ex.: `5543984162658` pode resolver para `554384162658`) porque a API ainda tenta o formato alternativo como fallback para compatibilidade com contas antigas.
 
 ## O que salvar no sistema integrador
 

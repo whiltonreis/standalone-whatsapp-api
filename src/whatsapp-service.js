@@ -97,6 +97,10 @@ class WhatsAppService {
         this._groupSubjectCache = new Map();
     }
 
+    cacheKeyForNumber(number) {
+        return `v2:${number}`;
+    }
+
     _trackSentId(id) {
         if (!id) return;
         this._sentByApiIds.add(id);
@@ -768,10 +772,9 @@ class WhatsAppService {
 
         if (brazilianNumber) {
             if (brazilianNumber.localLength === 11 && brazilianNumber.firstDigit === '9') {
-                // Numero com 9: tenta SEM o 9 primeiro (numeros antigos migrados pela operadora
-                // podem estar registrados no WhatsApp sem o 9; colocar sem-9 na frente evita
-                // falsos positivos onde onWhatsApp() retorna true para o numero errado)
-                candidates.unshift(
+                // Numero com 9: tenta primeiro exatamente como foi informado e
+                // deixa o formato sem 9 apenas como fallback para contas antigas.
+                candidates.push(
                     this.config.send.countryCode +
                     brazilianNumber.ddd +
                     brazilianNumber.subscriber.slice(1)
@@ -795,7 +798,7 @@ class WhatsAppService {
 
         if (normalizedNumber.length >= localStart + 8) {
             if (normalizedNumber[localStart] === '9') {
-                candidates.unshift(
+                candidates.push(
                     normalizedNumber.slice(0, localStart) +
                     normalizedNumber.slice(localStart + 1)
                 );
@@ -812,7 +815,8 @@ class WhatsAppService {
     }
 
     async resolveRegisteredNumber(normalizedNumber) {
-        const cached = this.numberCache.get(normalizedNumber);
+        const cacheKey = this.cacheKeyForNumber(normalizedNumber);
+        const cached = this.numberCache.get(cacheKey);
 
         if (cached) {
             return { number: cached, cached: true, candidates: [cached] };
@@ -824,10 +828,10 @@ class WhatsAppService {
             const result = await this.sock.onWhatsApp(candidate);
 
             if (result?.[0]?.exists) {
-                this.numberCache.set(normalizedNumber, candidate);
+                this.numberCache.set(cacheKey, candidate);
 
                 if (candidate !== normalizedNumber) {
-                    this.numberCache.set(candidate, candidate);
+                    this.numberCache.set(this.cacheKeyForNumber(candidate), candidate);
                 }
 
                 return { number: candidate, cached: false, candidates };
