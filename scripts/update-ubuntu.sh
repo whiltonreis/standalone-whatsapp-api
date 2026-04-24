@@ -119,6 +119,15 @@ detect_app_user() {
         fi
     fi
 
+    if [[ -f "${ENV_FILE}" ]]; then
+        local env_owner
+        env_owner="$(stat -c '%U' "${ENV_FILE}" 2>/dev/null || true)"
+        if [[ -n "${env_owner}" && "${env_owner}" != "UNKNOWN" ]]; then
+            printf '%s' "${env_owner}"
+            return
+        fi
+    fi
+
     printf '%s' "${WHATSAPP_SERVICE_USER:-${SUDO_USER:-root}}"
 }
 
@@ -151,6 +160,16 @@ run_as_app_user() {
 ensure_runtime_structure() {
     mkdir -p "${APP_DIR}/runtime/auth" "${APP_DIR}/runtime/cache" "${APP_DIR}/runtime/logs"
     chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}/runtime"
+}
+
+ensure_app_write_permissions() {
+    log "Ajustando permissoes do diretorio da API para ${APP_USER}..."
+
+    chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}"
+
+    if [[ -d "${APP_DIR}/.git" ]]; then
+        run_as_app_user git -C "${APP_DIR}" config --local --add safe.directory "${APP_DIR}" >/dev/null 2>&1 || true
+    fi
 }
 
 backup_state() {
@@ -304,6 +323,7 @@ main() {
     assert_ubuntu_family
     ensure_prerequisites
     ensure_runtime_structure
+    ensure_app_write_permissions
     backup_state
     stop_service
     stop_stray_processes
