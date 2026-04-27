@@ -263,7 +263,9 @@ restart_service() {
         return
     fi
 
-    fail "Servico ${SERVICE_NAME} nao encontrado. Rode o install-ubuntu.sh primeiro ou informe WHATSAPP_SERVICE_NAME com o nome correto."
+    log "Servico ${SERVICE_NAME} nao encontrado. API nao reiniciada automaticamente."
+    log "Para iniciar manualmente: sudo -u ${APP_USER} node ${APP_DIR}/index.js"
+    log "Para configurar o servico systemd: sudo bash ${SCRIPT_DIR}/install-ubuntu.sh"
 }
 
 wait_for_healthcheck() {
