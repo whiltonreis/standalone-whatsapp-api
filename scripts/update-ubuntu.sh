@@ -252,7 +252,7 @@ install_dependencies() {
 
 validate_application() {
     log "Validando sintaxe da API..."
-    run_as_app_user npm --prefix "${APP_DIR}" run check
+    (cd "${APP_DIR}" && run_as_app_user npm run check)
 }
 
 restart_service() {
