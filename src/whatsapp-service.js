@@ -462,8 +462,18 @@ class WhatsAppService {
             }
 
             const message   = this.extractTextFromMessageContent(item.message);
-            const mediaType = this.mediaTypeFromMessage(item.message || {});
-            const replyToExternalId = this.extractReplyReference(item.message || {});
+            let mediaType = this.mediaTypeFromMessage(item.message || {});
+            let replyToExternalId = this.extractReplyReference(item.message || {});
+
+            // Reactions: Baileys delivers reactionMessage.key.id as the target message reference
+            const reactionMsg = item.message?.reactionMessage;
+            if (reactionMsg) {
+                mediaType = 'reaction';
+                const reactionTargetId = typeof reactionMsg.key?.id === 'string' ? reactionMsg.key.id.trim() : '';
+                if (reactionTargetId) {
+                    replyToExternalId = reactionTargetId;
+                }
+            }
 
             if (!message && !mediaType) {
                 continue;
@@ -903,7 +913,19 @@ class WhatsAppService {
         this.ensureConnected();
         const target = await this.resolveMessageTarget(payload.target ?? payload.number);
 
-        const sendResult = await this.sock.sendMessage(target.jid, { text: message });
+        const msgOptions = {};
+        if (payload.reply_to_external_id) {
+            msgOptions.quoted = {
+                key: {
+                    remoteJid: target.jid,
+                    fromMe: Boolean(payload.reply_from_me),
+                    id: String(payload.reply_to_external_id),
+                },
+                message: { conversation: payload.reply_body || '' },
+            };
+        }
+
+        const sendResult = await this.sock.sendMessage(target.jid, { text: message }, msgOptions);
         this._trackSentId(sendResult?.key?.id);
 
         const logMeta = {
@@ -977,7 +999,19 @@ class WhatsAppService {
             msgContent = { document: buffer, fileName: fileName || 'arquivo', mimetype: mime || 'application/octet-stream' };
         }
 
-        const sendResult = await this.sock.sendMessage(target.jid, msgContent);
+        const mediaOptions = {};
+        if (payload.reply_to_external_id) {
+            mediaOptions.quoted = {
+                key: {
+                    remoteJid: target.jid,
+                    fromMe: Boolean(payload.reply_from_me),
+                    id: String(payload.reply_to_external_id),
+                },
+                message: { conversation: payload.reply_body || '' },
+            };
+        }
+
+        const sendResult = await this.sock.sendMessage(target.jid, msgContent, mediaOptions);
         this._trackSentId(sendResult?.key?.id);
 
         this.logger.info('Midia enviada', {
