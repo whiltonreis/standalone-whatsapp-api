@@ -443,6 +443,13 @@ async function startServer() {
         res.json(result);
     }));
 
+    app.post('/send-reaction', asyncHandler(async (req, res) => {
+        const service = sessionManager.get(DEFAULT_SESSION_ID);
+        if (!service) return res.status(503).json({ error: 'Sessao padrao nao iniciada.' });
+        const result = await service.sendReaction(req.body || {});
+        res.json(result);
+    }));
+
     app.post('/logout', asyncHandler(async (req, res) => {
         const service = sessionManager.get(DEFAULT_SESSION_ID);
         if (!service) return res.status(503).json({ error: 'Sessao padrao nao iniciada.' });
@@ -519,6 +526,13 @@ async function startServer() {
         const service = sessionManager.get(req.params.id);
         if (!service) return res.status(404).json({ error: 'Sessao nao encontrada.' });
         const result = await service.deleteMessage(req.body || {});
+        res.json(result);
+    }));
+
+    app.post('/sessions/:id/send-reaction', asyncHandler(async (req, res) => {
+        const service = sessionManager.get(req.params.id);
+        if (!service) return res.status(404).json({ error: 'Sessao nao encontrada.' });
+        const result = await service.sendReaction(req.body || {});
         res.json(result);
     }));
 

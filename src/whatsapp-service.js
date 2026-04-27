@@ -1043,6 +1043,35 @@ class WhatsAppService {
         return { ok: true };
     }
 
+    async sendReaction(payload) {
+        const { messageId, emoji } = payload;
+        if (!messageId) throw new Error('messageId obrigatorio.');
+
+        this.ensureConnected();
+        const target = await this.resolveMessageTarget(payload.target ?? payload.number);
+
+        const sendResult = await this.sock.sendMessage(target.jid, {
+            react: {
+                text: emoji || '',
+                key: {
+                    remoteJid: target.jid,
+                    fromMe: payload.fromMe !== false,
+                    id: messageId,
+                },
+            },
+        });
+
+        this._trackSentId(sendResult?.key?.id);
+
+        this.logger.info('Reacao enviada', {
+            target: this.formatLogTarget(target.jid),
+            messageId,
+            emoji: emoji || '(removida)',
+        });
+
+        return { ok: true };
+    }
+
     async logout() {
         this.isLoggingOut = true;
         this.clearReconnectTimer();
