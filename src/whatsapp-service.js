@@ -143,6 +143,21 @@ class WhatsAppService {
             return '';
         }
 
+        if (content.contactMessage) {
+            const name = String(content.contactMessage.displayName || '').trim();
+            const vcard = String(content.contactMessage.vcard || '');
+            const telMatch = vcard.match(/(?:TEL|tel)[^\n:]*:([^\r\n]+)/);
+            const phone = telMatch ? telMatch[1].trim() : '';
+            return [name, phone].filter(Boolean).join('\n') || 'Contato';
+        }
+
+        if (content.contactsArrayMessage) {
+            const contacts = Array.isArray(content.contactsArrayMessage.contacts)
+                ? content.contactsArrayMessage.contacts : [];
+            const names = contacts.map(c => String(c.displayName || '').trim()).filter(Boolean);
+            return names.join('\n') || 'Contatos';
+        }
+
         const candidates = [
             content.conversation,
             content.extendedTextMessage?.text,
@@ -262,6 +277,7 @@ class WhatsAppService {
     }
 
     mediaTypeFromMessage(msgContent) {
+        if (msgContent.contactMessage || msgContent.contactsArrayMessage) return 'contact';
         if (msgContent.imageMessage)    return 'image';
         if (msgContent.audioMessage)    return 'audio';
         if (msgContent.videoMessage)    return 'video';
