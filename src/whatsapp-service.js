@@ -36,6 +36,37 @@ function convertToOgg(inputPath) {
     });
 }
 
+function generateWaveformFromFile(filePath) {
+    return new Promise((resolve) => {
+        if (!ffmpegPath) { resolve(Buffer.alloc(64, 5)); return; }
+        const tempOut = filePath + '_waveform.raw';
+        execFile(ffmpegPath, [
+            '-y', '-i', filePath,
+            '-ac', '1', '-ar', '16000',
+            '-f', 's16le', '-t', '60',
+            tempOut,
+        ], (err) => {
+            if (err) { resolve(Buffer.alloc(64, 5)); return; }
+            try {
+                const data = fs.readFileSync(tempOut);
+                try { fs.unlinkSync(tempOut); } catch (_) {}
+                const samples = 64;
+                const totalSamples = Math.floor(data.length / 2);
+                const step = Math.max(1, Math.floor(totalSamples / samples));
+                const waveform = new Uint8Array(samples);
+                for (let i = 0; i < samples; i++) {
+                    const offset = Math.min(i * step * 2, data.length - 2);
+                    waveform[i] = Math.min(100, Math.floor(Math.abs(data.readInt16LE(offset)) / 328));
+                }
+                resolve(Buffer.from(waveform));
+            } catch (e) {
+                try { fs.unlinkSync(tempOut); } catch (_) {}
+                resolve(Buffer.alloc(64, 5));
+            }
+        });
+    });
+}
+
 async function prepareStickerBuffer(buffer, mime) {
     const cleanMime = String(mime || '').split(';')[0].trim().toLowerCase();
     if (cleanMime === 'image/webp' || !sharp) {
@@ -977,26 +1008,22 @@ class WhatsAppService {
             let audioBuffer = buffer;
             let audioMime = (mime || 'audio/ogg').split(';')[0].trim();
             const originalMime = audioMime;
-            // Sempre re-encoda para OGG/Opus para garantir compatibilidade com iOS WhatsApp.
-            // Pular a conversão para audio/ogg pode enviar arquivos com parametros incorretos
-            // (ex: gravacoes do Firefox) que causam "audio nao disponivel" no iPhone.
+            let convertedPath = null;
+            let waveformSourcePath = mediaPath;
             if (audioMime !== 'audio/mpeg') {
-                let convertedPath = null;
                 try {
                     convertedPath = await convertToOgg(mediaPath);
                     audioBuffer = fs.readFileSync(convertedPath);
                     audioMime = 'audio/ogg';
+                    waveformSourcePath = convertedPath;
                     this.logger.info('Audio convertido para OGG com sucesso', { from: originalMime });
                 } catch (convErr) {
                     this.logger.warn('Falha ao converter audio para OGG, enviando no formato original', { error: convErr.message, originalMime });
-                } finally {
-                    if (convertedPath) try { fs.unlinkSync(convertedPath); } catch (_) {}
                 }
             }
             const finalMime = audioMime === 'audio/ogg' ? 'audio/ogg; codecs=opus' : audioMime;
-            // waveform minimo evita "audio nao disponivel" em versoes iOS do WhatsApp
-            // que exigem dados de forma de onda para renderizar o player de voz
-            const waveform = Buffer.alloc(64, 5);
+            const waveform = await generateWaveformFromFile(waveformSourcePath);
+            if (convertedPath) try { fs.unlinkSync(convertedPath); } catch (_) {}
             msgContent = { audio: audioBuffer, mimetype: finalMime, ptt: true, waveform };
         } else if (mediaType === 'video') {
             msgContent = { video: buffer, caption: caption || '', mimetype: mime || 'video/mp4' };
