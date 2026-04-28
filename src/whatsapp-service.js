@@ -977,8 +977,10 @@ class WhatsAppService {
             let audioBuffer = buffer;
             let audioMime = (mime || 'audio/ogg').split(';')[0].trim();
             const originalMime = audioMime;
-            // WebM/Opus precisa ser convertido para OGG/Opus para WhatsApp reconhecer como audio de voz
-            if (audioMime !== 'audio/ogg' && audioMime !== 'audio/mpeg') {
+            // Sempre re-encoda para OGG/Opus para garantir compatibilidade com iOS WhatsApp.
+            // Pular a conversão para audio/ogg pode enviar arquivos com parametros incorretos
+            // (ex: gravacoes do Firefox) que causam "audio nao disponivel" no iPhone.
+            if (audioMime !== 'audio/mpeg') {
                 let convertedPath = null;
                 try {
                     convertedPath = await convertToOgg(mediaPath);
@@ -992,7 +994,10 @@ class WhatsAppService {
                 }
             }
             const finalMime = audioMime === 'audio/ogg' ? 'audio/ogg; codecs=opus' : audioMime;
-            msgContent = { audio: audioBuffer, mimetype: finalMime, ptt: true };
+            // waveform minimo evita "audio nao disponivel" em versoes iOS do WhatsApp
+            // que exigem dados de forma de onda para renderizar o player de voz
+            const waveform = Buffer.alloc(64, 5);
+            msgContent = { audio: audioBuffer, mimetype: finalMime, ptt: true, waveform };
         } else if (mediaType === 'video') {
             msgContent = { video: buffer, caption: caption || '', mimetype: mime || 'video/mp4' };
         } else {
